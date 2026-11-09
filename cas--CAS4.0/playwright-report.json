@@ -1,0 +1,221 @@
+{
+  "config": {
+    "argv": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "C:\\Users\\Lenovo\\Downloads\\cas--CAS4.0\\cas--CAS4.0\\node_modules\\@playwright\\test\\cli.js",
+      "test",
+      "--config=playwright.config.ts",
+      "--project=chromium",
+      "--grep",
+      "Authenticated Resident can navigate tabs"
+    ],
+    "configFile": "C:\\Users\\Lenovo\\Downloads\\cas--CAS4.0\\cas--CAS4.0\\playwright.config.ts",
+    "rootDir": "C:/Users/Lenovo/Downloads/cas--CAS4.0/cas--CAS4.0/e2e",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "C:/Users/Lenovo/Downloads/cas--CAS4.0/cas--CAS4.0/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "chromium",
+        "name": "chromium",
+        "testDir": "C:/Users/Lenovo/Downloads/cas--CAS4.0/cas--CAS4.0/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 45000
+      }
+    ],
+    "filteredProjects": [
+      {
+        "grep": {},
+        "grepInvert": null,
+        "outputDir": "C:\\Users\\Lenovo\\Downloads\\cas--CAS4.0\\cas--CAS4.0\\test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "name": "chromium",
+        "testDir": "C:\\Users\\Lenovo\\Downloads\\cas--CAS4.0\\cas--CAS4.0\\e2e",
+        "snapshotDir": "C:\\Users\\Lenovo\\Downloads\\cas--CAS4.0\\cas--CAS4.0\\e2e",
+        "testIgnore": [],
+        "testMatch": "**/*.@(spec|test).?(c|m)[jt]s?(x)",
+        "timeout": 45000,
+        "use": {
+          "baseURL": "http://localhost:5173",
+          "trace": "on-first-retry",
+          "screenshot": "only-on-failure",
+          "video": "retain-on-failure",
+          "browserName": "chromium",
+          "headless": true,
+          "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.8078.4 Safari/537.36",
+          "viewport": {
+            "width": 1280,
+            "height": 720
+          },
+          "screen": {
+            "width": 1920,
+            "height": 1080
+          },
+          "deviceScaleFactor": 1,
+          "isMobile": false,
+          "hasTouch": false,
+          "defaultBrowserType": "chromium"
+        },
+        "dependencies": [],
+        "ignoreSnapshots": false,
+        "__projectId": "chromium"
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "list",
+        null
+      ],
+      [
+        "json",
+        {
+          "outputFile": "playwright-report.json"
+        }
+      ],
+      [
+        "html",
+        {
+          "outputFolder": "playwright-report",
+          "open": "never"
+        }
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "default",
+    "updateSourceMethod": "patch",
+    "version": "1.64.1",
+    "workers": 1,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "resident.spec.ts",
+      "file": "resident.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "Resident Portal (http://localhost:5173)",
+          "file": "resident.spec.ts",
+          "line": 3,
+          "column": 6,
+          "specs": [
+            {
+              "title": "Authenticated Resident can navigate tabs, filter advisories, and view inbox",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 45000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "failed",
+                      "duration": 20051,
+                      "error": {
+                        "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoContainText\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m)\u001b[22m failed\n\nLocator: locator('h1')\nExpected pattern: \u001b[32m/Maria|Good day|community/i\u001b[39m\nReceived string:  \u001b[31m\"Join your municipal alert network.\"\u001b[39m\nTimeout: 10000ms\n\nCall log:\n\u001b[2m  - Expect \"toContainText\" locator('h1') with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for locator('h1')\u001b[22m\n\u001b[2m    22 × locator resolved to <h1 class=\"mb-4 text-3xl font-extrabold leading-tight tracking-tight text-white sm:text-4xl\">Join your municipal alert network.</h1>\u001b[22m\n\u001b[2m       - unexpected value \"Join your municipal alert network.\"\u001b[22m\n",
+                        "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoContainText\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m)\u001b[22m failed\n\nLocator: locator('h1')\nExpected pattern: \u001b[32m/Maria|Good day|community/i\u001b[39m\nReceived string:  \u001b[31m\"Join your municipal alert network.\"\u001b[39m\nTimeout: 10000ms\n\nCall log:\n\u001b[2m  - Expect \"toContainText\" locator('h1') with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for locator('h1')\u001b[22m\n\u001b[2m    22 × locator resolved to <h1 class=\"mb-4 text-3xl font-extrabold leading-tight tracking-tight text-white sm:text-4xl\">Join your municipal alert network.</h1>\u001b[22m\n\u001b[2m       - unexpected value \"Join your municipal alert network.\"\u001b[22m\n\n    at C:\\Users\\Lenovo\\Downloads\\cas--CAS4.0\\cas--CAS4.0\\e2e\\resident.spec.ts:111:38",
+                        "location": {
+                          "file": "C:\\Users\\Lenovo\\Downloads\\cas--CAS4.0\\cas--CAS4.0\\e2e\\resident.spec.ts",
+                          "column": 38,
+                          "line": 111
+                        },
+                        "snippet": "\u001b[0m \u001b[90m 109 |\u001b[39m\n \u001b[90m 110 |\u001b[39m     \u001b[90m// Verify Overview page loaded\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 111 |\u001b[39m     \u001b[36mawait\u001b[39m expect(page\u001b[33m.\u001b[39mlocator(\u001b[32m'h1'\u001b[39m))\u001b[33m.\u001b[39mtoContainText(\u001b[35m/Maria|Good day|community/i\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m     |\u001b[39m                                      \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 112 |\u001b[39m\n \u001b[90m 113 |\u001b[39m     \u001b[90m// Navigate to Local advisories\u001b[39m\n \u001b[90m 114 |\u001b[39m     \u001b[36mconst\u001b[39m advisoriesNav \u001b[33m=\u001b[39m page\u001b[33m.\u001b[39mlocator(\u001b[32m'.portal-sidebar button:has-text(\"Local advisories\")'\u001b[39m)\u001b[33m;\u001b[39m\u001b[0m"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "C:\\Users\\Lenovo\\Downloads\\cas--CAS4.0\\cas--CAS4.0\\e2e\\resident.spec.ts",
+                            "column": 38,
+                            "line": 111
+                          },
+                          "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoContainText\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m)\u001b[22m failed\n\nLocator: locator('h1')\nExpected pattern: \u001b[32m/Maria|Good day|community/i\u001b[39m\nReceived string:  \u001b[31m\"Join your municipal alert network.\"\u001b[39m\nTimeout: 10000ms\n\nCall log:\n\u001b[2m  - Expect \"toContainText\" locator('h1') with timeout 10000ms\u001b[22m\n\u001b[2m  - waiting for locator('h1')\u001b[22m\n\u001b[2m    22 × locator resolved to <h1 class=\"mb-4 text-3xl font-extrabold leading-tight tracking-tight text-white sm:text-4xl\">Join your municipal alert network.</h1>\u001b[22m\n\u001b[2m       - unexpected value \"Join your municipal alert network.\"\u001b[22m\n\n\n  109 |\n  110 |     // Verify Overview page loaded\n> 111 |     await expect(page.locator('h1')).toContainText(/Maria|Good day|community/i);\n      |                                      ^\n  112 |\n  113 |     // Navigate to Local advisories\n  114 |     const advisoriesNav = page.locator('.portal-sidebar button:has-text(\"Local advisories\")');\n    at C:\\Users\\Lenovo\\Downloads\\cas--CAS4.0\\cas--CAS4.0\\e2e\\resident.spec.ts:111:38"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-11-09T12:10:31.180Z",
+                      "annotations": [],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "C:\\Users\\Lenovo\\Downloads\\cas--CAS4.0\\cas--CAS4.0\\test-results\\resident-Resident-Portal-h-781dd-r-advisories-and-view-inbox-chromium\\test-failed-1.png"
+                        },
+                        {
+                          "name": "video",
+                          "contentType": "video/webm",
+                          "path": "C:\\Users\\Lenovo\\Downloads\\cas--CAS4.0\\cas--CAS4.0\\test-results\\resident-Resident-Portal-h-781dd-r-advisories-and-view-inbox-chromium\\video.webm"
+                        },
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "C:\\Users\\Lenovo\\Downloads\\cas--CAS4.0\\cas--CAS4.0\\test-results\\resident-Resident-Portal-h-781dd-r-advisories-and-view-inbox-chromium\\error-context.md"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "C:\\Users\\Lenovo\\Downloads\\cas--CAS4.0\\cas--CAS4.0\\e2e\\resident.spec.ts",
+                        "column": 38,
+                        "line": 111
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "4a6db2b65275cdd9e9f8-14db301a9c65d96852d4",
+              "file": "resident.spec.ts",
+              "line": 91,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-11-09T12:10:29.568Z",
+    "duration": 24236.547,
+    "expected": 0,
+    "skipped": 0,
+    "unexpected": 1,
+    "flaky": 0
+  }
+}
