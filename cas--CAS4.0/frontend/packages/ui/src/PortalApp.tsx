@@ -18,14 +18,19 @@ import { supabaseAction } from "./supabaseActions.js";
 import "./styles.css";
 
 const portalSettings = localPortalSettings;
-const REQUIRED_ANNOUNCEMENT_CHANNELS = ["facebook", "gmail"] as const;
-const DEFAULT_ANNOUNCEMENT_CHANNELS = [...REQUIRED_ANNOUNCEMENT_CHANNELS];
+const DEFAULT_ANNOUNCEMENT_CHANNELS = ["facebook", "gmail"];
+const ANNOUNCEMENT_PUROKS = Array.from({ length: 10 }, (_, index) => String(index + 1));
 
 type EmailDeliverySummary = {
   status: string;
   sent: number;
   failed: number;
   errors: Array<{ message: string; count?: number }>;
+};
+
+type SocialDeliverySummary = {
+  status: string;
+  platforms: Array<{ platform: string; status: string; message?: string; permalinkUrl?: string }>;
 };
 
 function copy(key: string): string {
@@ -41,10 +46,6 @@ function settingsFor(portal: Portal): PortalSettings {
 function requiredSetting<T>(value: T | undefined, name: string): T {
   if (value === undefined) throw new Error(`Missing prototype setting: ${name}.`);
   return value;
-}
-
-function isRequiredAnnouncementChannel(channel: string): boolean {
-  return REQUIRED_ANNOUNCEMENT_CHANNELS.some(requiredChannel => requiredChannel === channel);
 }
 
 function apiBaseUrl(portal: Portal): string {
@@ -522,27 +523,19 @@ function ResidentAuth({ onLogin, onRegister, error, busy }: { onLogin: (event: F
                         placeholder={copy("copy_43bc6228d8b4")}
                         className={`${inputClass} mt-1.5`}
                       />
-                      <small className="mt-1 block text-[11px] font-normal text-slate-500">Include your purok in this address if applicable; notices use it to refine area matching.</small>
+                      <small className="mt-1 block text-[11px] font-normal text-slate-500">Enter your house, building, or street address. Select your purok separately below.</small>
                     </label>
 
                     <div className="grid gap-3 sm:grid-cols-[1fr_130px]">
                       <label className={labelClass}>
                         {copy("copy_52630f30e6ef")}
                         <span className="text-rose-600 ml-1">{copy("copy_684888c0ebb1")}</span>
-                        <input
-                          name="barangay"
-                          list="resident-barangays"
-                          required
-                          maxLength={100}
-                          autoComplete="address-level3"
-                          placeholder={copy("copy_c3b5b226013a")}
-                          className={`${inputClass} mt-1.5`}
-                        />
-                        <datalist id="resident-barangays">
+                        <select name="barangay" required defaultValue="" autoComplete="address-level3" className={`${inputClass} mt-1.5`}>
+                          <option value="" disabled>{copy("copy_c3b5b226013a")}</option>
                           {requiredSetting(settingsFor("resident").barangays, "resident.barangays").map(name => (
-                            <option key={name} value={name} />
+                            <option key={name} value={name}>{name}</option>
                           ))}
-                        </datalist>
+                        </select>
                       </label>
 
                       <label className={labelClass}>
@@ -559,6 +552,15 @@ function ResidentAuth({ onLogin, onRegister, error, busy }: { onLogin: (event: F
                         />
                       </label>
                     </div>
+
+                    <label className={labelClass}>
+                      Purok <span className="font-normal normal-case text-slate-500">(optional)</span>
+                      <select name="purok" defaultValue="" className={`${inputClass} mt-1.5`}>
+                        <option value="">Not specified / no numbered purok</option>
+                        {ANNOUNCEMENT_PUROKS.map(number => <option key={number} value={number}>Purok {number}</option>)}
+                      </select>
+                      <small className="mt-1 block text-[11px] font-normal text-slate-500">Choose your purok to receive announcements targeted to that area.</small>
+                    </label>
 
                     <div className="grid gap-3 sm:grid-cols-2">
                       <label className={labelClass}>
@@ -715,6 +717,7 @@ function App({ portal }: { portal: Portal }) {
   const [loading, setLoading] = useState(false);
   const [inbox, setInbox] = useState<SMSRecord[]>([]);
   const [publishedDelivery, setPublishedDelivery] = useState<{ advisoryId: number; summary: EmailDeliverySummary } | null>(null);
+  const [publishedSocialDelivery, setPublishedSocialDelivery] = useState<{ advisoryId: number; summary: SocialDeliverySummary } | null>(null);
   const [retryingEmail, setRetryingEmail] = useState(false);
   const isResident = portal === "resident";
 
@@ -846,6 +849,7 @@ function App({ portal }: { portal: Portal }) {
         phoneNumber: data.get("phoneNumber"),
         address: data.get("address"),
         barangay: data.get("barangay"),
+        purok: data.get("purok"),
         district: data.get("district"),
         city: data.get("city"),
         postalCode: data.get("postalCode"),
@@ -887,7 +891,8 @@ function App({ portal }: { portal: Portal }) {
     event.preventDefault();
     if (!token || !modal) return;
     const form = new FormData(event.currentTarget);
-    const body = Object.fromEntries(form.entries());
+    const body: Record<string, unknown> = Object.fromEntries(form.entries());
+    if (modal === "advisory") body.channels = form.getAll("channels").map(String);
     const endpoint = modal === "advisory" ? "/advisories" : "/work-orders";
     try {
       await localAction(portal, endpoint, token, { method: "POST", body: JSON.stringify(body) });
@@ -903,13 +908,12 @@ function App({ portal }: { portal: Portal }) {
     if ((portal !== "cepalco" && portal !== "water") || !token) return;
     setBusy(true);
     setError("");
+    setPublishedDelivery(null);
+    setPublishedSocialDelivery(null);
     const form = new FormData(event.currentTarget);
     try {
       const imageDataUrl = await readAnnouncementImage(form.get("announcementImage"));
-      const selectedChannels = [...new Set([
-        ...form.getAll("channels").map(String),
-        ...REQUIRED_ANNOUNCEMENT_CHANNELS,
-      ])];
+      const selectedChannels = [...new Set(form.getAll("channels").map(String))];
       if (selectedChannels.length === 0) {
         throw new Error("Select at least one announcement channel.");
       }
@@ -917,12 +921,20 @@ function App({ portal }: { portal: Portal }) {
         throw new Error("Add an announcement image before publishing to Facebook, Instagram, or Gmail.");
       }
       const area = String(form.get("area") || "");
-      const estimate = await localAction<{ emailRecipients: number; smsRecipients: number; totalResidentAccounts: number }>(portal, `/advisories/recipient-estimate?area=${encodeURIComponent(area)}`, token);
+      const estimate = await localAction<{
+        emailRecipients: number;
+        smsRecipients: number;
+        totalResidentAccounts: number;
+        residentsMissingBarangay: number;
+      }>(portal, `/advisories/recipient-estimate?area=${encodeURIComponent(area)}`, token);
       const scheduledAtInput = String(form.get("scheduledAt") || "");
       const publishTime = scheduledAtInput ? `Scheduled for ${formatResidentDateTime(new Date(scheduledAtInput).toISOString())}` : "Publish immediately";
       const audience = [
         selectedChannels.includes("gmail") ? `Gmail: ${estimate.emailRecipients} eligible residents in this area (${estimate.totalResidentAccounts} resident accounts total)` : null,
         selectedChannels.includes("sms") ? `Simulated SMS inbox: ${estimate.smsRecipients} residents with a phone number and SMS enabled` : null,
+        (selectedChannels.includes("gmail") || selectedChannels.includes("sms")) && estimate.residentsMissingBarangay > 0
+          ? `Warning: ${estimate.residentsMissingBarangay} resident profile(s) have no barangay and will not receive area-targeted email or SMS until their location is added.`
+          : null,
         selectedChannels.includes("facebook") ? "Facebook: official utility page" : null,
         selectedChannels.includes("instagram") ? "Instagram: official utility account" : null,
       ].filter(Boolean).join("\n");
@@ -934,9 +946,7 @@ function App({ portal }: { portal: Portal }) {
         facebookUrl?: string | null;
         instagramUrl?: string | null;
         emailDelivery?: EmailDeliverySummary | null;
-        socialDelivery?: {
-          platforms: Array<{ platform: string; status: string; message?: string; permalinkUrl?: string }>;
-        } | null;
+        socialDelivery?: SocialDeliverySummary | null;
         smsQueued?: number;
       }>(portal, "/advisories", token, {
         method: "POST",
@@ -960,13 +970,16 @@ function App({ portal }: { portal: Portal }) {
       } else {
         setPublishedDelivery(null);
       }
+      setPublishedSocialDelivery(published.socialDelivery
+        ? { advisoryId: published.id, summary: published.socialDelivery }
+        : null);
       if (published.scheduledAt) {
         setToast(`Announcement scheduled for ${formatResidentDateTime(published.scheduledAt)}. No channel deliveries will start before then.`);
       } else {
         const deliveryResults: string[] = [];
         if (selectedChannels.includes("gmail")) {
           const summary = published.emailDelivery;
-          deliveryResults.push(`Gmail: ${summary?.sent ? `${summary.sent} sent${summary.failed ? `, ${summary.failed} failed` : ""}` : summary?.failed ? `${summary.failed} failed` : summary?.status === "no_recipients" ? "no eligible resident accounts in this area" : "not sent"}`);
+          deliveryResults.push(`Gmail: ${summary?.sent ? `${summary.sent} sent${summary.failed ? `, ${summary.failed} failed` : ""}` : summary?.failed ? `${summary.failed} failed` : summary?.status === "no_recipients" ? `not sent; no resident profiles match ${area}` : "not sent"}`);
         }
         for (const platform of published.socialDelivery?.platforms ?? []) {
           deliveryResults.push(`${platform.platform}: ${platform.status}${platform.permalinkUrl ? ` — ${platform.permalinkUrl}` : ""}${platform.message ? ` (${platform.message})` : ""}`);
@@ -1035,6 +1048,7 @@ function App({ portal }: { portal: Portal }) {
           phoneNumber: form.get("phoneNumber"),
           address: form.get("address"),
           barangay: form.get("barangay"),
+          purok: form.get("purok"),
           district: form.get("district"),
           city: form.get("city"),
           postalCode: form.get("postalCode"),
@@ -1125,9 +1139,20 @@ function App({ portal }: { portal: Portal }) {
           <div className="flex items-center gap-2">{(page === "overview" || (page === "incidents" && portal !== "cepalco")) && !isResident && <button onClick={() => portal === "water" || portal === "cepalco" ? navigate("publish") : setModal("advisory")} className="inline-flex items-center gap-2 rounded-lg bg-[var(--brand)] px-3 py-2.5 text-xs font-bold text-white hover:bg-[var(--brand-dark)]"><Icon name="plus" className="h-4 w-4" />{newButton}</button>}{page === "overview" && !isResident && <button onClick={() => setModal("work")} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700"><Icon name="plus" className="h-4 w-4" />{copy("copy_311599f38345")}</button>}<span className="hidden rounded-full border border-slate-200 bg-white px-3 py-2 text-[10px] font-semibold text-slate-500 md:inline">{new Intl.DateTimeFormat("en-PH", { month: "short", day: "numeric", year: "numeric" }).format(new Date())}</span></div>
         </div>
         {error && token && <div role="alert" className="mb-4 flex items-center justify-between rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800"><span>{error}</span><button onClick={() => setError(copy("copy_e3b0c44298fc"))} aria-label={copy("copy_2db046678b9c")}><Icon name="close" /></button></div>}
-        {publishedDelivery && <div role="status" className={`mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3 text-sm ${publishedDelivery.summary.failed ? "border-amber-200 bg-amber-50 text-amber-900" : "border-emerald-200 bg-emerald-50 text-emerald-900"}`}>
+        {publishedDelivery && <div role={publishedDelivery.summary.failed || publishedDelivery.summary.status === "no_recipients" ? "alert" : "status"} className={`mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3 text-sm ${publishedDelivery.summary.failed || publishedDelivery.summary.status === "no_recipients" ? "border-amber-200 bg-amber-50 text-amber-900" : "border-emerald-200 bg-emerald-50 text-emerald-900"}`}>
           <span>{advisoryPublishMessage("", publishedDelivery.summary)}</span>
           {publishedDelivery.summary.failed > 0 && <button type="button" onClick={() => void retryFailedEmails()} disabled={retryingEmail} className="rounded-md border border-current px-3 py-2 text-xs font-semibold disabled:opacity-60">{retryingEmail ? "Retrying…" : "Retry failed email(s)"}</button>}
+        </div>}
+        {publishedSocialDelivery && <div role={publishedSocialDelivery.summary.platforms.some(platform => platform.status !== "published" || !platform.permalinkUrl) ? "alert" : "status"} className="mb-4 rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-800">
+          <strong className="mb-2 block">Social publishing · {publishedSocialDelivery.summary.status}</strong>
+          <ul className="m-0 list-inside list-disc space-y-1">
+            {publishedSocialDelivery.summary.platforms.map(platform => <li key={platform.platform}>
+              {platform.platform}: {platform.status}
+              {platform.permalinkUrl && <> — <a href={platform.permalinkUrl} target="_blank" rel="noreferrer" className="font-semibold text-[var(--brand)] underline">Open exact post</a></>}
+              {platform.message && ` (${platform.message})`}
+              {platform.status === "published" && !platform.permalinkUrl && !platform.message && " (post link unavailable)"}
+            </li>)}
+          </ul>
         </div>}
         {loading && <div className="mb-4 h-1 overflow-hidden rounded-full bg-slate-200"><div className="h-full w-1/3 animate-pulse bg-[var(--brand)]" /></div>}
         {page === "overview" ? <Overview portal={portal} actor={actor} advisories={activeAdvisories} workOrders={items.workOrders} network={items.network} onNavigate={navigate} onAction={kind => kind === "advisory" && !isResident ? navigate("publish") : setModal(kind)} /> : isResident && page === "inbox" ? <VirtualInbox messages={inbox} onRead={async message => { await localAction(portal, `/inbox/${message.id}/read`, token, { method: "PATCH" }); await loadWorkspace(); }} /> : page === "profile" && isResident ? <ResidentProfile actor={actor} selectedImage={profileImage} saving={busy} onImageChange={setProfileImage} onSave={saveProfile} onPasswordChange={updatePassword} /> : page === "advisories" && isResident ? <ResidentAdvisories items={items.advisories} workOrders={items.workOrders} actor={actor} /> : (portal === "cepalco" || portal === "water") && page === "publish" ? portal === "water" ? <WaterPublishForm busy={busy} token={token} onCancel={() => navigate("overview")} onSubmit={publishAnnouncement} /> : <AnnouncementComposer portal={portal} busy={busy} token={token} onCancel={() => navigate("overview")} onSubmit={publishAnnouncement} /> : portal === "cepalco" && page === "incidents" ? <CepalcoDisruptions items={items.advisories} token={token} onStatusUpdate={updateAdvisoryStatus} /> : portal === "water" && page === "incidents" ? <WaterAdvisories items={items.advisories} token={token} onStatusUpdate={updateAdvisoryStatus} /> : portal === "cepalco" && page === "restoration" ? <CepalcoRestorationMap advisories={advisories} /> : page === "restoration" ? <Network portal={portal} advisories={advisories} network={items.network} /> : page === "services" ? <Services advisories={items.advisories} /> : <section className="space-y-4">
@@ -1136,7 +1161,7 @@ function App({ portal }: { portal: Portal }) {
         </section>}
       </section>
     </div>
-    {toast && <div role={toast.startsWith("Announcement saved.") && /failed|not_configured|no eligible resident accounts|no text was sent|not sent/i.test(toast) ? "alert" : "status"} className={`fixed bottom-5 right-5 z-40 rounded-lg px-4 py-3 text-sm font-medium text-white shadow-xl ${toast.startsWith("Announcement saved.") && /failed|not_configured|no eligible resident accounts|no text was sent|not sent/i.test(toast) ? "bg-amber-800" : "bg-emerald-900"}`}>{toast}</div>}
+    {toast && <div role={toast.startsWith("Announcement saved.") && /failed|not_configured|no eligible resident accounts|no resident profiles match|no text was sent|not sent/i.test(toast) ? "alert" : "status"} className={`fixed bottom-5 right-5 z-40 rounded-lg px-4 py-3 text-sm font-medium text-white shadow-xl ${toast.startsWith("Announcement saved.") && /failed|not_configured|no eligible resident accounts|no resident profiles match|no text was sent|not sent/i.test(toast) ? "bg-amber-800" : "bg-emerald-900"}`}>{toast}</div>}
     {modal && <RecordModal portal={portal} kind={modal} onClose={() => setModal(null)} onSubmit={submitRecord} />}
   </main>;
 }
@@ -1172,7 +1197,7 @@ function ResidentProfile({ actor, selectedImage, saving, onImageChange, onSave, 
   return <div className="resident-profile-page space-y-4">
     <article className="resident-profile-card flex flex-wrap items-center gap-4 rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 shadow-sm">
       {image ? <img src={image} alt={`${actor.name} profile`} className="h-16 w-16 rounded-full border border-slate-200 object-cover shadow-sm" /> : <span className="avatar grid h-16 w-16 place-items-center rounded-full bg-rose-50 text-xl font-bold text-rose-700 shadow-sm">{actor.name.split(" ").map(part => part[0]).slice(0, 2).join("").toUpperCase()}</span>}
-      <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><strong className="text-base font-bold text-slate-900">{actor.name}</strong><span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-bold text-emerald-800">{copy("copy_39882d1ad5ec")}</span></div><p className="mb-0 mt-1 text-xs text-slate-500">{actor.barangay || "Barangay not set"}{actor.district ? ` · ${actor.district}` : ""} {copy("copy_6e01f78b9eb4")}{actor.city || "Cagayan de Oro City"}</p><p className="mb-0 mt-1 text-xs text-slate-400">{copy("copy_cbbd7f35fdea")}{actor.email}</p></div>
+      <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><strong className="text-base font-bold text-slate-900">{actor.name}</strong><span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-bold text-emerald-800">{copy("copy_39882d1ad5ec")}</span></div><p className="mb-0 mt-1 text-xs text-slate-500">{actor.barangay || "Barangay not set"}{actor.purok ? ` · Purok ${actor.purok}` : ""}{actor.district ? ` · ${actor.district}` : ""} {copy("copy_6e01f78b9eb4")}{actor.city || "Cagayan de Oro City"}</p><p className="mb-0 mt-1 text-xs text-slate-400">{copy("copy_cbbd7f35fdea")}{actor.email}</p></div>
       <div className="flex flex-wrap gap-2"><label className="cursor-pointer rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm transition-colors">{copy("copy_c5fbcb8b00ea")}<input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={event => selectImage(event.currentTarget.files?.[0])} /></label>{image && <button type="button" onClick={() => { onImageChange(""); setImageError(""); }} className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 shadow-sm transition-colors">{copy("copy_c3812fc4acb8")}</button>}</div>
       {imageError && <p role="alert" className="w-full text-xs font-medium text-rose-700">{imageError}</p>}
     </article>
@@ -1191,7 +1216,8 @@ function ResidentProfile({ actor, selectedImage, saving, onImageChange, onSave, 
         <div className="mb-4 flex items-center justify-between gap-2"><h2 className="m-0 text-base font-bold text-slate-900">{copy("copy_6f9f42ba937e")}</h2><span className="rounded-full bg-violet-50 px-2.5 py-0.5 text-xs font-bold text-violet-700">{copy("copy_8a59897bdc1a")}</span></div>
         <div className="grid gap-4 sm:grid-cols-2">
           <label className={`${labelClass} sm:col-span-2`}>{copy("copy_432d86cc06aa")}<input name="address" maxLength={240} defaultValue={actor.address || ""} autoComplete="street-address" className={fieldClass} /><span className="mt-1 block text-xs font-normal text-slate-500">Include your purok in this address if applicable; notices use it to refine area matching.</span></label>
-          <label className={labelClass}>{copy("copy_ad1315f3e999")}<input name="barangay" list="profile-barangays" maxLength={100} defaultValue={actor.barangay || ""} autoComplete="address-level3" className={fieldClass} /><datalist id="profile-barangays">{requiredSetting(settingsFor("resident").barangays, "resident.barangays").map(name => <option key={name} value={name} />)}</datalist></label>
+          <label className={labelClass}>{copy("copy_ad1315f3e999")}<select name="barangay" required defaultValue={actor.barangay || ""} autoComplete="address-level3" className={fieldClass}><option value="" disabled>Select your barangay</option>{requiredSetting(settingsFor("resident").barangays, "resident.barangays").map(name => <option key={name} value={name}>{name}</option>)}</select></label>
+          <label className={labelClass}>Purok (optional)<select name="purok" defaultValue={actor.purok || ""} className={fieldClass}><option value="">Not specified / no numbered purok</option>{ANNOUNCEMENT_PUROKS.map(number => <option key={number} value={number}>Purok {number}</option>)}</select><span className="mt-1 block text-xs font-normal text-slate-500">Choose your purok to receive announcements targeted to that area.</span></label>
           <label className={labelClass}>{copy("copy_ac3506fe618c")}<input name="postalCode" maxLength={20} defaultValue={actor.postalCode || ""} autoComplete="postal-code" className={fieldClass} /></label>
           <label className={labelClass}>{copy("copy_c4473f4e49d0")}<input name="district" maxLength={80} defaultValue={actor.district || ""} className={fieldClass} /></label>
           <label className={labelClass}>{copy("copy_1f15f6d9f6b5")}<input name="city" maxLength={100} defaultValue={actor.city || ""} autoComplete="address-level2" className={fieldClass} /></label>
@@ -1448,7 +1474,7 @@ function GenericAnnouncementComposer({
     </section>
     <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-5">
       <h3 className="m-0 text-sm font-bold text-slate-900">Announcement channels</h3>
-      <p className="m-0 text-xs text-slate-500">Facebook and Gmail are included with every announcement. Other channels are optional.</p>
+      <p className="m-0 text-xs text-slate-500">Select the channels you want to use. Choose at least one.</p>
       <div className="grid gap-2 sm:grid-cols-2">
         {([
           ["facebook", "Facebook", "Post every announcement to the utility Facebook page."],
@@ -1456,7 +1482,7 @@ function GenericAnnouncementComposer({
           ["gmail", "Gmail", "Email every registered resident with the announcement image."],
           ["sms", "SMS (simulated)", "Add a simulated alert to opted-in residents' inboxes; no text message is sent."],
         ] as const).map(([value, title, description]) => <label key={value} className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 p-3 text-xs">
-          <input type="checkbox" name="channels" value={value} checked={isRequiredAnnouncementChannel(value)} disabled={isRequiredAnnouncementChannel(value)} className="mt-0.5 accent-[var(--brand)]" />
+          <input type="checkbox" name="channels" value={value} defaultChecked={DEFAULT_ANNOUNCEMENT_CHANNELS.includes(value)} className="mt-0.5 accent-[var(--brand)]" />
           <span><strong className="block text-slate-800">{title}</strong><small className="mt-1 block text-slate-500">{description}</small></span>
         </label>)}
       </div>
@@ -1485,15 +1511,30 @@ function minimumLocalDateTime(): string {
   return date.toISOString().slice(0, 16);
 }
 
+function AnnouncementAreaPurokSelect({ portal, onChange }: { portal: "cepalco" | "water"; onChange: (area: string) => void }) {
+  const barangays = requiredSetting(settingsFor("resident").barangays, "resident.barangays");
+  const savedArea = readPortalDraftValue(portal, "area");
+  const savedMatch = savedArea.match(/^\s*(Carmen|Nazareth|Balulang)(?:\s*,\s*Purok\s+(\d+))?\s*$/i);
+  const savedBarangay = barangays.find(barangay => barangay.toLowerCase() === savedMatch?.[1]?.toLowerCase()) ?? "";
+  const savedPurok = savedMatch?.[2] && ANNOUNCEMENT_PUROKS.includes(savedMatch[2]) ? savedMatch[2] : "";
+  const [barangay, setBarangay] = useState(savedBarangay);
+  const [purok, setPurok] = useState(savedPurok);
+  const area = `${barangay}${purok ? `, Purok ${purok}` : ""}`;
+
+  return <>
+    <label className="cepalco-field"><span>Affected barangay</span><select aria-label="Affected barangay" value={barangay} required onChange={event => { const nextBarangay = event.target.value; setBarangay(nextBarangay); onChange(`${nextBarangay}${purok ? `, Purok ${purok}` : ""}`); }}><option value="" disabled>Select a barangay</option>{barangays.map(name => <option key={name} value={name}>{name}</option>)}</select></label>
+    <label className="cepalco-field"><span>Purok (optional)</span><select aria-label="Affected purok" value={purok} onChange={event => { const nextPurok = event.target.value; setPurok(nextPurok); onChange(`${barangay}${nextPurok ? `, Purok ${nextPurok}` : ""}`); }}><option value="">All puroks</option>{ANNOUNCEMENT_PUROKS.map(number => <option key={number} value={number}>Purok {number}</option>)}</select><small>Choose All puroks to notify residents throughout the barangay.</small></label>
+    <input type="hidden" name="area" value={area} />
+  </>;
+}
+
 function CepalcoPublishForm({ busy, token, onCancel, onSubmit }: { busy: boolean; token: string | null; onCancel: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
   const categories = requiredSetting(settingsFor("cepalco").categories, "cepalco.categories");
   const priorities = requiredSetting(settingsFor("cepalco").priorities, "cepalco.priorities");
   const [category, setCategory] = useState(() => readPortalDraftValue("cepalco", "category") || categories[0]?.value || "");
+  const [selectedArea, setSelectedArea] = useState(() => readPortalDraftValue("cepalco", "area"));
   const [selectedLocation, setSelectedLocation] = useState<CommunityAlertMapLocation | null>(null);
-  const [channels, setChannels] = useState<string[]>(() => {
-    const draft = readPortalDraftChannels("cepalco");
-    return draft.length > 0 ? draft : [...DEFAULT_ANNOUNCEMENT_CHANNELS];
-  });
+  const [channels, setChannels] = useState<string[]>(() => readPortalDraftChannels("cepalco"));
   const [schedule, setSchedule] = useState(() => readPortalDraftValue("cepalco", "schedule") === "true");
   const [draftSaved, setDraftSaved] = useState(false);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -1514,27 +1555,25 @@ function CepalcoPublishForm({ busy, token, onCancel, onSubmit }: { busy: boolean
     setDraftSaved(true);
   }
   function toggleChannel(channel: string) {
-    if (isRequiredAnnouncementChannel(channel)) return;
     setChannels(current => current.includes(channel)
       ? current.filter(value => value !== channel)
       : [...current, channel]);
     setDraftSaved(false);
   }
-  return <form className="cepalco-publish-layout" onSubmit={onSubmit}>
-    <div className="space-y-3">
+  return <form className="cepalco-publish-layout water-publish-form" onSubmit={onSubmit}>
+      <div className="water-publish-top cepalco-publish-top"><div><span>CEPALCO OPERATIONS / PUBLIC NOTICES</span><h2>Publish service advisory</h2></div><div><button type="button" onClick={onCancel}>Cancel</button><button type="button" onClick={event => saveDraft(event.currentTarget.form)}>Save draft</button><button type="submit" className="cepalco-primary" disabled={busy}>{busy ? "Publishing…" : schedule ? "Schedule advisory" : "Publish advisory"}</button></div></div>
       <section className="cepalco-form-card">
-        <span className="cepalco-kicker">CEPALCO OPERATIONS / PUBLIC NOTICES</span>
-        <h2>Publish service advisory</h2>
-        <p>Write a clear service update, choose who receives it, then publish or schedule it.</p>
+        <h2>Classify the service update</h2>
+        <p>Choose the advisory type and response priority for this notice.</p>
         <div className="cepalco-category-grid">{categories.map(({ value, description, icon }) => <button key={value} type="button" aria-pressed={category === value} onClick={() => { setCategory(value); setDraftSaved(false); }} className={`cepalco-category ${category === value ? "selected" : ""}`}><span>{icon}</span><strong>{value}</strong><small>{description}</small></button>)}</div>
         <input type="hidden" name="category" value={category} />
         <label className="cepalco-field"><span>Priority / severity</span><select name="priority" defaultValue={readPortalDraftValue("cepalco", "priority") || "High"} onChange={() => setDraftSaved(false)}>{priorities.map(priority => <option key={priority}>{priority}</option>)}</select></label>
       </section>
       <section className="cepalco-form-card">
-        <h2>Headline and affected service area</h2>
+        <h2>Advisory headline and affected area</h2>
         <p>Identify the issue and the neighborhoods or zones that may be affected.</p>
         <label className="cepalco-field"><span>Advisory headline</span><input name="title" required maxLength={160} defaultValue={readPortalDraftValue("cepalco", "title")} placeholder="Summarize the service update" onChange={() => setDraftSaved(false)} /></label>
-        <label className="cepalco-field"><span>Affected barangay and purok</span><input name="area" list="cepalco-pilot-barangays" required maxLength={160} defaultValue={readPortalDraftValue("cepalco", "area")} placeholder="Carmen, Nazareth, or Balulang; add Purok if needed" onChange={() => setDraftSaved(false)} /><datalist id="cepalco-pilot-barangays">{["Carmen", "Nazareth", "Balulang"].map(name => <option key={name} value={name} />)}</datalist><small>Target one pilot barangay per advisory. Add a purok, such as “Carmen, Purok 4,” to narrow matching.</small></label>
+        <AnnouncementAreaPurokSelect portal="cepalco" onChange={area => { setSelectedArea(area); setSelectedLocation(null); setDraftSaved(false); }} />
       </section>
       <section className="cepalco-form-card">
         <h2>Service window</h2>
@@ -1545,7 +1584,7 @@ function CepalcoPublishForm({ busy, token, onCancel, onSubmit }: { busy: boolean
         </div>
       </section>
       <section className="cepalco-form-card">
-        <div className="mb-2 flex items-center justify-between gap-2"><div><h2>Public notice and safety guidance</h2><p className="mb-0">Describe the impact and any steps residents should take.</p></div><small className="text-xs font-semibold text-slate-500">{detailsLength} / 1800</small></div>
+        <div className="mb-2 flex items-center justify-between gap-2"><div>        <h2>Public notice and guidance</h2><p className="mb-0">Describe the impact and any steps residents should take.</p></div><small className="text-xs font-semibold text-slate-500">{detailsLength} / 1800</small></div>
         <label className="cepalco-field"><span>Advisory details</span><textarea name="details" required rows={6} maxLength={1800} defaultValue={readPortalDraftValue("cepalco", "details")} placeholder="Explain what happened, who is affected, and any safety guidance." onChange={event => { setDetailsLength(event.target.value.length); setDraftSaved(false); }} /></label>
       </section>
       <section className="cepalco-form-card">
@@ -1553,8 +1592,8 @@ function CepalcoPublishForm({ busy, token, onCancel, onSubmit }: { busy: boolean
         <p>Optionally add a point on the map for residents to locate the advisory.</p>
         <input type="hidden" name="latitude" value={selectedLocation?.latitude ?? ""} />
         <input type="hidden" name="longitude" value={selectedLocation?.longitude ?? ""} />
-        <GoogleMap mode="picker" height={250} label="Select affected service location" onLocationSelected={setSelectedLocation} />
-        <p className="mb-0 mt-2 text-xs font-medium text-slate-600">{selectedLocation ? `Selected point: ${selectedLocation.latitude.toFixed(5)}, ${selectedLocation.longitude.toFixed(5)}` : "No map point selected. The advisory can still be published without one."}</p>
+        <GoogleMap mode="picker" height={250} label="Select affected service location" selectedArea={selectedArea} onLocationSelected={setSelectedLocation} />
+        <p className="mb-0 mt-2 text-xs font-medium text-slate-600">{selectedLocation ? `Selected point: ${selectedLocation.latitude.toFixed(5)}, ${selectedLocation.longitude.toFixed(5)}. Click elsewhere on the map to adjust it.` : "Choose an affected area above to place a pin automatically, or click the map to place one manually."}</p>
       </section>
       <section className="cepalco-form-card">
         <h2>Notice image</h2>
@@ -1563,15 +1602,15 @@ function CepalcoPublishForm({ busy, token, onCancel, onSubmit }: { busy: boolean
         {imagePreview && <img src={imagePreview} alt="Selected advisory image preview" className="cepalco-announcement-preview" />}
       </section>
       <section className="cepalco-form-card">
-        <h2>Distribution channels</h2>
-        <p>Facebook and Gmail are included with every announcement. Other channels are optional.</p>
+        <h2>Announcement channels</h2>
+        <p>Select the channels you want to use. Choose at least one.</p>
         {([
-          ["gmail", "Gmail", "Email every registered resident with the announcement image."],
-          ["facebook", "Facebook", "Post every announcement to the connected CEPALCO page."],
+          ["gmail", "Email residents", "Email every registered resident with the announcement image."],
+          ["facebook", "Facebook", "Publish the announcement to the connected CEPALCO page."],
           ["instagram", "Instagram", "Publish an image and caption to the connected account."],
           ["sms", "Resident inbox alert", "Create simulated inbox alerts; no text messages are sent."],
         ] as const).map(([value, title, description]) => <label className="cepalco-channel" key={value}>
-          <input type="checkbox" name="channels" value={value} checked={isRequiredAnnouncementChannel(value) || channels.includes(value)} disabled={isRequiredAnnouncementChannel(value)} onChange={() => toggleChannel(value)} />
+          <input type="checkbox" name="channels" value={value} checked={channels.includes(value)} onChange={() => toggleChannel(value)} />
           <span><strong>{title}</strong><small>{description}</small></span>
         </label>)}
         <SocialConnectionStatus portal="cepalco" token={token} />
@@ -1583,14 +1622,7 @@ function CepalcoPublishForm({ busy, token, onCancel, onSubmit }: { busy: boolean
         {schedule && <label className="cepalco-field">Publish date and time<input name="scheduledAt" type="datetime-local" required min={minimumLocalDateTime()} defaultValue={readPortalDraftValue("cepalco", "scheduledAt")} onChange={() => setDraftSaved(false)} /></label>}
         {!schedule && <input type="hidden" name="scheduledAt" value="" />}
       </section>
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        {draftSaved && <span role="status" className="mr-auto text-xs font-semibold text-teal-800">Draft saved in this browser.</span>}
-        <button type="button" className="cepalco-secondary" onClick={onCancel}>Cancel</button>
-        <button type="button" className="cepalco-secondary" onClick={event => saveDraft(event.currentTarget.form)}>Save draft</button>
-        <button type="submit" disabled={busy} className="cepalco-primary">{busy ? "Publishing…" : schedule ? "Schedule advisory" : "Publish advisory"}</button>
-      </div>
-    </div>
-    <aside className="space-y-3"><div className="cepalco-form-card"><span className="cepalco-kicker">{copy("copy_88f75d3e34fd")}</span><h3>{category}</h3><p className="text-[9px] text-slate-500">The selected service category will identify the advisory in utility and resident feeds.</p><div className="cepalco-scene"><span className="scene-cloud" /><span className="scene-pole" /><span className="scene-wire wire-one" /><span className="scene-wire wire-two" /><span className="scene-bucket" /><span className="scene-worker worker-one" /><span className="scene-worker worker-two" /><span className="scene-road" /></div><p className="mb-0 mt-2 text-[8px] text-slate-500">Review the affected area and message before publishing.</p></div><div className="cepalco-form-card"><h2>Before publishing</h2><ul className="cepalco-checklist"><li>Confirm the affected location.</li><li>Include any known start or restoration time.</li><li>Choose only channels ready to receive this notice.</li></ul></div></aside>
+      <div className="water-publish-footer cepalco-publish-footer">{draftSaved && <span className="water-draft-saved" role="status">Draft saved in this browser.</span>}<button type="button" onClick={onCancel}>Cancel</button><button type="button" onClick={event => saveDraft(event.currentTarget.form)}>Save draft</button><button type="submit" className="cepalco-primary" disabled={busy}>{busy ? "Publishing…" : schedule ? "Schedule advisory" : "Publish advisory"}</button></div>
   </form>;
 }
 
@@ -1599,7 +1631,9 @@ function readPortalDraftValue(portal: "cepalco" | "water", name: string) {
 }
 
 function readPortalDraftChannels(portal: "cepalco" | "water"): string[] {
-  return readPortalDraftValue(portal, "channels").split("|")
+  const savedChannels = localStorage.getItem(`civicalert:${portal}:draft:channels`);
+  if (savedChannels === null) return [...DEFAULT_ANNOUNCEMENT_CHANNELS];
+  return savedChannels.split("|")
     .filter(channel => ["gmail", "facebook", "instagram", "sms"].includes(channel));
 }
 
@@ -1751,7 +1785,7 @@ function StandardAnnouncementCard({
       : status === "Scheduled" ? "scheduled"
         : status === "Publishing failed" ? "failed" : "active";
   const area = item.area.toLocaleLowerCase();
-  const residentLocation = [resident?.barangay, resident?.district, resident?.address, resident?.city]
+  const residentLocation = [resident?.barangay, resident?.purok ? `Purok ${resident.purok}` : "", resident?.district, resident?.address, resident?.city]
     .filter(Boolean).join(" ").toLocaleLowerCase();
   const residentBarangay = resident?.barangay?.trim().toLocaleLowerCase();
   const matchesBarangay = Boolean(residentBarangay && area.includes(residentBarangay));
@@ -1926,12 +1960,10 @@ function WaterPublishForm({ busy, token, onCancel, onSubmit }: { busy: boolean; 
   const categories = requiredSetting(settingsFor("water").categories, "water.categories");
   const priorities = requiredSetting(settingsFor("water").priorities, "water.priorities");
   const [category, setCategory] = useState(() => readWaterDraftValue("category") || categories[0]?.value || "");
+  const [selectedArea, setSelectedArea] = useState(() => readWaterDraftValue("area"));
   const [draftSaved, setDraftSaved] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState<CommunityAlertMapLocation | null>(null);
-  const [channels, setChannels] = useState<string[]>(() => {
-    const draft = readWaterDraftChannels();
-    return draft.length > 0 ? draft : [...DEFAULT_ANNOUNCEMENT_CHANNELS];
-  });
+  const [channels, setChannels] = useState<string[]>(() => readWaterDraftChannels());
   const [schedule, setSchedule] = useState(() => readWaterDraftValue("schedule") === "true");
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [detailsLength, setDetailsLength] = useState(() => readWaterDraftValue("details").length);
@@ -1951,7 +1983,6 @@ function WaterPublishForm({ busy, token, onCancel, onSubmit }: { busy: boolean; 
     setDraftSaved(true);
   };
   const toggleChannel = (channel: string) => {
-    if (isRequiredAnnouncementChannel(channel)) return;
     setChannels(current => current.includes(channel)
       ? current.filter(value => value !== channel)
       : [...current, channel]);
@@ -1968,7 +1999,7 @@ function WaterPublishForm({ busy, token, onCancel, onSubmit }: { busy: boolean; 
     <section className="water-form-card">
       <div><h3>Advisory headline and affected area</h3><p>Keep the headline brief and identify the impacted district or neighborhood.</p></div>
       <label><span>Advisory headline</span><input name="title" required maxLength={160} defaultValue={readWaterDraftValue("title")} onChange={() => setDraftSaved(false)} placeholder="Summarize the service update" /></label>
-      <label><span>Affected barangay and purok</span><input name="area" list="water-pilot-barangays" required maxLength={160} defaultValue={readWaterDraftValue("area")} onChange={() => setDraftSaved(false)} placeholder="Carmen, Nazareth, or Balulang; add Purok if needed" /><datalist id="water-pilot-barangays">{["Carmen", "Nazareth", "Balulang"].map(name => <option key={name} value={name} />)}</datalist><small>Target one pilot barangay per advisory. Add a purok, such as “Balulang, Purok 2,” to narrow matching.</small></label>
+      <AnnouncementAreaPurokSelect portal="water" onChange={area => { setSelectedArea(area); setSelectedLocation(null); setDraftSaved(false); }} />
     </section>
     <section className="water-form-card">
       <div><h3>Service window</h3><p>Include the expected work start and estimated restoration time when known.</p></div>
@@ -1985,8 +2016,8 @@ function WaterPublishForm({ busy, token, onCancel, onSubmit }: { busy: boolean; 
       <div><h3>Pin the affected area</h3><p>Optionally mark the service location on the map.</p></div>
       <input type="hidden" name="latitude" value={selectedLocation?.latitude ?? ""} />
       <input type="hidden" name="longitude" value={selectedLocation?.longitude ?? ""} />
-      <GoogleMap mode="picker" height={250} label="Select affected service location" onLocationSelected={setSelectedLocation} />
-      <p className="water-selection-note">{selectedLocation ? `Selected point: ${selectedLocation.latitude.toFixed(5)}, ${selectedLocation.longitude.toFixed(5)}` : "No map point selected. The advisory can still be published without one."}</p>
+      <GoogleMap mode="picker" height={250} label="Select affected service location" selectedArea={selectedArea} onLocationSelected={setSelectedLocation} />
+      <p className="water-selection-note">{selectedLocation ? `Selected point: ${selectedLocation.latitude.toFixed(5)}, ${selectedLocation.longitude.toFixed(5)}. Click elsewhere on the map to adjust it.` : "Choose an affected area above to place a pin automatically, or click the map to place one manually."}</p>
     </section>
     <section className="water-form-card">
       <div><h3>Notice image</h3><p>Add an image to include it with selected Facebook, Instagram, and Gmail delivery. Instagram always requires an image.</p></div>
@@ -1994,7 +2025,7 @@ function WaterPublishForm({ busy, token, onCancel, onSubmit }: { busy: boolean; 
       {imagePreview && <img src={imagePreview} alt="Selected advisory image preview" className="water-image-preview" />}
     </section>
     <section className="water-form-card">
-      <div><h3>Announcement channels</h3><p>Facebook and Gmail are sent for every announcement. Other channels are optional.</p></div>
+      <div><h3>Announcement channels</h3><p>Select the channels you want to use. Choose at least one.</p></div>
       <div className="water-channel-list">
         {([
           ["gmail", "Email residents", "Email every registered resident with the announcement image."],
@@ -2003,7 +2034,7 @@ function WaterPublishForm({ busy, token, onCancel, onSubmit }: { busy: boolean; 
           ["sms", "Resident inbox alert", "Create simulated inbox alerts; no text messages are sent."],
         ] as const).map(([value, title, description]) => <label className="water-channel-row" key={value}>
           <span><strong>{title}</strong><small>{description}</small></span>
-          <input type="checkbox" name="channels" value={value} checked={isRequiredAnnouncementChannel(value) || channels.includes(value)} disabled={isRequiredAnnouncementChannel(value)} onChange={() => toggleChannel(value)} />
+          <input type="checkbox" name="channels" value={value} checked={channels.includes(value)} onChange={() => toggleChannel(value)} />
         </label>)}
       </div>
       <SocialConnectionStatus portal="water" token={token} />
@@ -2024,7 +2055,9 @@ function readWaterDraftValue(name: string) {
 }
 
 function readWaterDraftChannels(): string[] {
-  const channels = readWaterDraftValue("channels").split("|");
+  const savedChannels = localStorage.getItem("civicalert:water:draft:channels");
+  if (savedChannels === null) return [...DEFAULT_ANNOUNCEMENT_CHANNELS];
+  const channels = savedChannels.split("|");
   return channels.filter(channel => ["gmail", "facebook", "instagram", "sms"].includes(channel));
 }
 

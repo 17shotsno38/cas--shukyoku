@@ -24,6 +24,7 @@ export type SupabaseProfile = {
   phone_number: string | null;
   address: string | null;
   barangay: string | null;
+  purok: string | null;
   district: string | null;
   city: string | null;
   postal_code: string | null;
@@ -44,6 +45,7 @@ export function profileActor(profile: SupabaseProfile) {
     phoneNumber: profile.phone_number ?? "",
     address: profile.address ?? "",
     barangay: profile.barangay ?? "",
+    purok: profile.purok ?? "",
     district: profile.district ?? "",
     city: profile.city ?? "",
     postalCode: profile.postal_code ?? "",

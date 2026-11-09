@@ -142,6 +142,7 @@ try {
     ["phone_number", "TEXT"],
     ["address", "TEXT"],
     ["barangay", "TEXT"],
+    ["purok", "TEXT"],
     ["district", "TEXT"],
     ["city", "TEXT"],
     ["postal_code", "TEXT"],
@@ -223,6 +224,7 @@ export type Actor = {
   phone_number?: string | null;
   address?: string | null;
   barangay?: string | null;
+  purok?: string | null;
   district?: string | null;
   city?: string | null;
   postal_code?: string | null;
@@ -260,7 +262,7 @@ export function hashToken(token: string): string {
 export function findActorForToken(token: string): Actor | undefined {
   return database.prepare(`
     SELECT users.id, users.name, users.email, users.role, users.utility,
-      users.phone_number, users.address, users.barangay, users.district, users.city,
+      users.phone_number, users.address, users.barangay, users.purok, users.district, users.city,
       users.postal_code, users.profile_image, users.sms_alerts, users.notify_maintenance,
       users.notify_email_digest, users.immediate_email_alerts, users.terms_accepted_at
     FROM sessions JOIN users ON users.id = sessions.user_id

@@ -49,7 +49,7 @@ export const portalSettings = {
       overview: "Your service area status and latest verified community updates.",
       advisories: "Latest utility advisories and maintenance updates for your area.",
       services: "Check the current service status for your utility providers.",
-      profile: "Manage your personal information, barangay location, and alert preferences.",
+      profile: "Manage your contact details and service location, including barangay and purok, for area-targeted alerts.",
     },
     sidebarLabel: "RESIDENT SERVICES",
     pageHeadingLabel: "RESIDENT PORTAL · CAGAYAN DE ORO CITY",
@@ -60,7 +60,7 @@ export const portalSettings = {
     registerHighlights: [
       { icon: "shield", title: "Service Interruption Updates", detail: "Local power and water service advisories for your area." },
       { icon: "pulse", title: "SMS Alert Preferences", detail: "Choose whether to opt in to text alerts when messaging is available." },
-      { icon: "map", title: "Barangay-Level Updates", detail: "Relevant advisories tailored to your community." },
+      { icon: "map", title: "Area-Targeted Updates", detail: "Choose your barangay and purok to match relevant advisories." },
     ],
     barangays: ["Agusan", "Balulang", "Bugo", "Carmen", "Gusa", "Iponan", "Kauswagan", "Lumbia", "Macabalan", "Macasandig", "Nazareth", "Patag", "Puerto"],
     districts: ["1st District", "2nd District"],

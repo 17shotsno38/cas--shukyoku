@@ -71,6 +71,7 @@ test("resident profile edits preserve location and dispatch stays targeted and u
     phoneNumber: "09170000000",
     address: "1 Test Street",
     barangay: "Carmen",
+    purok: "4",
     district: "1st District",
     city: "Cagayan de Oro City",
     postalCode: "9000",
@@ -82,6 +83,7 @@ test("resident profile edits preserve location and dispatch stays targeted and u
     immediateEmailAlerts: true,
   });
   assert.equal(optedInRegistration.response.status, 201);
+  assert.equal((optedInRegistration.result.actor as Record<string, unknown>).purok, "4");
   const optedInToken = optedInRegistration.result.token as string;
   const optedInProfile = await jsonRequest(`${residentApi}/auth/profile`, "PATCH", {
     name: "Consenting Resident",
@@ -127,6 +129,7 @@ test("resident profile edits preserve location and dispatch stays targeted and u
     instagramToken: process.env.META_INSTAGRAM_ACCESS_TOKEN,
     publicBaseUrl: process.env.META_PUBLIC_BASE_URL,
   };
+  let facebookPermalinkAttempts = 0;
   process.env.META_FACEBOOK_PAGE_ID = "test-page";
   process.env.META_FACEBOOK_PAGE_ACCESS_TOKEN = "test-page-token";
   process.env.META_INSTAGRAM_BUSINESS_ACCOUNT_ID = "test-instagram";
@@ -144,7 +147,9 @@ test("resident profile edits preserve location and dispatch stays targeted and u
       return new Response(JSON.stringify({ id: "test-instagram-post" }), { status: 200 });
     }
     if (url.hostname === "graph.facebook.com" && url.searchParams.get("fields") === "permalink_url") {
-      return new Response(JSON.stringify({}), { status: 200 });
+      facebookPermalinkAttempts += 1;
+      if (facebookPermalinkAttempts === 1) return new Response("Temporary Meta error", { status: 503 });
+      return new Response(JSON.stringify({ permalink_url: "https://www.facebook.com/test-page/posts/456" }), { status: 200 });
     }
     if (url.hostname === "graph.facebook.com" && url.searchParams.get("fields") === "permalink") {
       return new Response(JSON.stringify({ permalink: "https://www.instagram.com/p/test-post/" }), { status: 200 });
@@ -162,9 +167,12 @@ test("resident profile edits preserve location and dispatch stays targeted and u
     assert.equal(facebookAdvisory.response.status, 201);
     assert.equal(facebookAdvisory.result.facebookUrl, "https://www.facebook.com/test-page/posts/456");
     assert.equal(facebookAdvisory.result.instagramUrl, "https://www.instagram.com/p/test-post/");
+    assert.equal(facebookPermalinkAttempts, 2);
     const residentFacebookAdvisories = await jsonRequest(`${residentApi}/advisories`);
-    assert.ok((residentFacebookAdvisories.result as unknown as Array<Record<string, unknown>>)
-      .some(item => item.id === facebookAdvisory.result.id && item.facebookUrl === "https://www.facebook.com/test-page/posts/456"));
+    const residentFacebookAdvisory = (residentFacebookAdvisories.result as unknown as Array<Record<string, unknown>>)
+      .find(item => item.id === facebookAdvisory.result.id);
+    assert.equal(residentFacebookAdvisory?.facebookUrl, "https://www.facebook.com/test-page/posts/456");
+    assert.equal(residentFacebookAdvisory?.instagramUrl, "https://www.instagram.com/p/test-post/");
     const residentSocialInbox = await jsonRequest(`${residentApi}/inbox`, "GET", undefined, optedInToken);
     const socialMessage = (residentSocialInbox.result as unknown as Array<Record<string, unknown>>)
       .find(item => item.reference === facebookAdvisory.result.reference);
@@ -194,14 +202,11 @@ test("resident profile edits preserve location and dispatch stays targeted and u
     serviceStartsAt: "2026-10-23T08:00:00.000Z",
     estimatedRestorationAt: "2026-10-23T12:00:00.000Z",
     channels: ["sms"],
-    imageDataUrl: "data:image/png;base64,iVBORw0KGgo=",
     scheduledAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
   }, cepalcoToken);
   assert.equal(scheduled.response.status, 201);
   assert.equal(scheduled.result.publicationStatus, "scheduled");
-  assert.ok((scheduled.result.channels as string[]).includes("sms"), JSON.stringify(scheduled.result.channels));
-  assert.ok((scheduled.result.channels as string[]).includes("facebook"));
-  assert.ok((scheduled.result.channels as string[]).includes("gmail"));
+  assert.deepEqual(scheduled.result.channels, ["sms"]);
   assert.equal(scheduled.result.priority, "Urgent");
   assert.equal(scheduled.result.serviceStartsAt, "2026-10-23T08:00:00.000Z");
   assert.equal(scheduled.result.estimatedRestorationAt, "2026-10-23T12:00:00.000Z");
@@ -225,6 +230,31 @@ test("resident profile edits preserve location and dispatch stays targeted and u
   }, cepalcoToken);
   assert.equal(invalidPriority.response.status, 400);
   assert.match(String(invalidPriority.result.error), /valid advisory priority/);
+  const noChannels = await jsonRequest(`${cepalcoApi}/advisories`, "POST", {
+    title: "No channel selected",
+    area: "Carmen",
+    details: "This advisory must select a delivery channel.",
+    channels: [],
+  }, cepalcoToken);
+  assert.equal(noChannels.response.status, 400);
+  assert.match(String(noChannels.result.error), /at least one announcement channel/);
+  const invalidAffectedArea = await jsonRequest(`${cepalcoApi}/advisories`, "POST", {
+    title: "Free-text affected area",
+    area: "Carmen, Purok West",
+    details: "The affected area must be selected from the dropdown options.",
+    channels: ["sms"],
+  }, cepalcoToken);
+  assert.equal(invalidAffectedArea.response.status, 400);
+  assert.match(String(invalidAffectedArea.result.error), /Choose a barangay and an available purok/);
+  const selectedPurok = await jsonRequest(`${cepalcoApi}/advisories`, "POST", {
+    title: "Selected purok test",
+    area: "Agusan, Purok 4",
+    details: "A valid dropdown purok selection should be accepted.",
+    channels: ["sms"],
+    scheduledAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  }, cepalcoToken);
+  assert.equal(selectedPurok.response.status, 201);
+  assert.equal(selectedPurok.result.area, "Agusan, Purok 4");
   const scheduledPublic = await jsonRequest(`${residentApi}/advisories`);
   const scheduledId = Number(scheduled.result.id);
   const scheduledReference = String(scheduled.result.reference);
@@ -242,11 +272,12 @@ test("resident profile edits preserve location and dispatch stays targeted and u
   assert.equal(scheduledState.publication_status, "published");
   const scheduledEmailCount = database.prepare("SELECT COUNT(*) AS count FROM email_deliveries WHERE advisory_id = ?")
     .get(scheduledId) as { count: number };
-  assert.equal(scheduledEmailCount.count, 2);
+  assert.equal(scheduledEmailCount.count, 0);
   const residentId = (database.prepare("SELECT id FROM users WHERE email = ?").get("opted-in@example.test") as { id: number }).id;
-  const preservedLocation = database.prepare("SELECT address,barangay FROM users WHERE id = ?").get(residentId) as { address: string; barangay: string };
+  const preservedLocation = database.prepare("SELECT address,barangay,purok FROM users WHERE id = ?").get(residentId) as { address: string; barangay: string; purok: string };
   assert.equal(preservedLocation.address, registrationFields.address);
   assert.equal(preservedLocation.barangay, registrationFields.barangay);
+  assert.equal(preservedLocation.purok, registrationFields.purok);
   const optedOutResidentId = (database.prepare("SELECT id FROM users WHERE email = ?").get("not-opted-in@example.test") as { id: number }).id;
   const simulatedSmsRows = database.prepare("SELECT resident_id FROM sms_deliveries WHERE advisory_id = ?").all(scheduledId) as Array<{ resident_id: number }>;
   assert.deepEqual(simulatedSmsRows.map(row => row.resident_id), [residentId]);
@@ -271,15 +302,10 @@ test("resident profile edits preserve location and dispatch stays targeted and u
       item.estimatedRestorationAt === "2026-10-23T12:00:00.000Z",
   ));
   const publishedImage = await fetch(`${residentApi}/advisories/${scheduledId}/image`);
-  assert.equal(publishedImage.status, 200);
-  assert.match(publishedImage.headers.get("content-type") || "", /^image\/png/);
-  assert.deepEqual(Buffer.from(await publishedImage.arrayBuffer()), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  assert.equal(publishedImage.status, 404);
   const residentAdvisories = await jsonRequest(`${residentApi}/advisories`);
-  assert.equal(
-    (residentAdvisories.result as unknown as Array<Record<string, unknown>>).find(item => item.id === scheduledId)?.imageUrl,
-    `/advisories/${scheduledId}/image`,
-  );
   const residentScheduled = (residentAdvisories.result as unknown as Array<Record<string, unknown>>).find(item => item.id === scheduledId);
+  assert.equal(residentScheduled?.imageUrl, null);
   assert.equal(residentScheduled?.priority, "Urgent");
   assert.equal(residentScheduled?.serviceStartsAt, "2026-10-23T08:00:00.000Z");
   assert.equal(residentScheduled?.estimatedRestorationAt, "2026-10-23T12:00:00.000Z");
@@ -293,6 +319,7 @@ test("resident profile edits preserve location and dispatch stays targeted and u
     area: "Carmen",
     type: "Outage",
     details: "Full announcement text and safety information.",
+    channels: ["facebook", "gmail"],
     imageDataUrl: "data:image/png;base64,iVBORw0KGgo=",
   }, cepalcoToken);
   assert.equal(advisory.response.status, 201);

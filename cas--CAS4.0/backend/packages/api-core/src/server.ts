@@ -3,6 +3,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { createHash, randomBytes, randomInt } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { database, findActorForToken, hashPassword, issueSession, seedDemoAccounts, verifyPassword, type Actor } from "./database.js";
+import { portalSettings } from "./portalSettings.js";
 import {
   type GmailConnectionFailure,
   assertGmailTokenEncryptionConfigured,
@@ -30,6 +31,7 @@ type ResidentProfile = {
   phone_number: string | null;
   address: string | null;
   barangay: string | null;
+  purok: string | null;
   district: string | null;
   city: string | null;
   postal_code: string | null;
@@ -44,7 +46,6 @@ type EmailRecipient = Pick<ResidentProfile, "name" | "email">;
 const utilities: Record<Exclude<Portal, "resident">, string> = { cepalco: "CEPALCO", water: "Water District" };
 const notificationChannels = ["facebook", "instagram", "gmail", "sms"] as const;
 type NotificationChannel = typeof notificationChannels[number];
-const requiredAnnouncementChannels: NotificationChannel[] = ["facebook", "gmail"];
 
 function supabaseAdmin() {
   const url = process.env.SUPABASE_URL?.trim();
@@ -64,24 +65,24 @@ async function syncResidentProfiles(supabase: ReturnType<typeof supabaseAdmin>) 
     const existing = database.prepare("SELECT id FROM users WHERE lower(email) = lower(?) AND role = 'resident' LIMIT 1")
       .get(resident.email) as { id: number } | undefined;
     const columns = [
-      resident.name, resident.email, resident.phone_number, resident.address, resident.barangay,
+      resident.name, resident.email, resident.phone_number, resident.address, resident.barangay, resident.purok,
       resident.district, resident.city, resident.postal_code, resident.profile_image,
       Number(resident.sms_alerts), Number(resident.notify_maintenance),
       Number(resident.notify_email_digest), Number(resident.immediate_email_alerts), resident.terms_accepted_at,
     ];
     if (existing) {
       database.prepare(`
-        UPDATE users SET name=?,email=?,phone_number=?,address=?,barangay=?,district=?,city=?,
+        UPDATE users SET name=?,email=?,phone_number=?,address=?,barangay=?,purok=?,district=?,city=?,
           postal_code=?,profile_image=?,sms_alerts=?,notify_maintenance=?,notify_email_digest=?,
           immediate_email_alerts=?,terms_accepted_at=? WHERE id=?
       `).run(...columns, existing.id);
     } else {
       database.prepare(`
         INSERT INTO users
-          (name,email,password_hash,role,utility,phone_number,address,barangay,district,city,
+          (name,email,password_hash,role,utility,phone_number,address,barangay,purok,district,city,
            postal_code,profile_image,sms_alerts,notify_maintenance,notify_email_digest,
            immediate_email_alerts,terms_accepted_at)
-        VALUES (?,?,?,'resident',NULL,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,'resident',NULL,?,?,?,?,?,?,?,?,?,?,?,?,?)
       `).run(resident.name, resident.email, hashPassword(randomBytes(32).toString("hex")), ...columns.slice(2));
     }
   }
@@ -93,7 +94,7 @@ async function residentProfilesFromSupabase(supabase: ReturnType<typeof supabase
   const pageSize = 1000;
   for (let offset = 0; ; offset += pageSize) {
     const { data, error } = await supabase.from("profiles")
-      .select("id,name,email,role,utility,phone_number,address,barangay,district,city,postal_code,profile_image,sms_alerts,notify_maintenance,notify_email_digest,immediate_email_alerts,terms_accepted_at")
+      .select("id,name,email,role,utility,phone_number,address,barangay,purok,district,city,postal_code,profile_image,sms_alerts,notify_maintenance,notify_email_digest,immediate_email_alerts,terms_accepted_at")
       .eq("role", "resident")
       .order("id")
       .range(offset, offset + pageSize - 1);
@@ -110,13 +111,14 @@ function required(value: unknown, name: string): string {
 }
 
 function parseAnnouncementChannels(value: unknown): NotificationChannel[] {
-  const channels = value === undefined ? requiredAnnouncementChannels : value;
+  const channels = value === undefined ? [] : value;
   if (!Array.isArray(channels) ||
       channels.some(channel => typeof channel !== "string" || !notificationChannels.includes(channel as NotificationChannel))) {
     throw new Error("Select valid announcement channels.");
   }
-  const selectedChannels = channels as NotificationChannel[];
-  return [...new Set([...selectedChannels, ...requiredAnnouncementChannels])];
+  const selectedChannels = [...new Set(channels as NotificationChannel[])];
+  if (selectedChannels.length === 0) throw new Error("Select at least one announcement channel.");
+  return selectedChannels;
 }
 
 function parseScheduledAt(value: unknown): string | null {
@@ -137,26 +139,50 @@ function parseOptionalDateTime(value: unknown, name: string): string | null {
   return date.toISOString();
 }
 
-const pilotBarangays = ["Carmen", "Nazareth", "Balulang"];
+const residentBarangays = portalSettings.resident.barangays ?? [];
+const pilotPuroks = new Set(Array.from({ length: 10 }, (_, index) => String(index + 1)));
 
-function matchesResidentTarget(area: string, resident: { barangay?: string | null; address?: string | null }): boolean {
-  const normalizedArea = area.toLocaleLowerCase();
-  const targetBarangays = pilotBarangays.filter(target => normalizedArea.includes(target.toLocaleLowerCase()));
-  if (targetBarangays.length !== 1) return false;
+function parseAffectedArea(value: unknown): string {
+  const area = required(value, "Affected service area");
+  const match = area.match(/^(.+?)(?:,\s*Purok\s+(\d+))?$/i);
+  const barangay = residentBarangays.find(item => item.toLocaleLowerCase() === match?.[1]?.trim().toLocaleLowerCase());
+  if (!match || !barangay || (match[2] && !pilotPuroks.has(match[2]))) {
+    throw new Error("Choose a barangay and an available purok from the list.");
+  }
+  return `${barangay}${match[2] ? `, Purok ${match[2]}` : ""}`;
+}
+
+function normalizeResidentBarangay(value: unknown): string {
+  const submitted = required(value, "Barangay");
+  const barangay = residentBarangays.find(item => item.toLocaleLowerCase() === submitted.toLocaleLowerCase());
+  if (!barangay) throw new Error("Choose a barangay from the list.");
+  return barangay;
+}
+
+function normalizeResidentPurok(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  const purok = typeof value === "string" ? value.trim() : "";
+  if (!pilotPuroks.has(purok)) throw new Error("Choose a purok from the list, or leave it blank.");
+  return purok;
+}
+
+function matchesResidentTarget(area: string, resident: { barangay?: string | null; purok?: string | null; address?: string | null }): boolean {
+  const match = area.match(/^(.+?)(?:,\s*Purok\s+(\d+))?$/i);
+  const targetBarangay = residentBarangays.find(item => item.toLocaleLowerCase() === match?.[1]?.trim().toLocaleLowerCase());
+  if (!match || !targetBarangay || (match[2] && !pilotPuroks.has(match[2]))) return false;
   const barangay = resident.barangay?.trim();
-  if (!barangay || targetBarangays[0].toLocaleLowerCase() !== barangay.toLocaleLowerCase()) return false;
-  const puroks = normalizedArea.match(/purok\s+[\w-]+/g) ?? [];
-  if (!puroks.length) return true;
-  const normalizedAddress = `${resident.address ?? ""} ${resident.barangay ?? ""}`.toLocaleLowerCase();
-  return puroks.some(purok => normalizedAddress.includes(purok));
+  if (!barangay || targetBarangay.toLocaleLowerCase() !== barangay.toLocaleLowerCase()) return false;
+  if (!match[2]) return true;
+  const residentPurok = resident.purok?.trim() || (resident.address ?? "").match(/\bpurok\s+(\d+)\b/i)?.[1];
+  return residentPurok === match[2];
 }
 
 function createSimulatedSms(advisoryId: number, area: string): number {
   const recipients = database.prepare(`
-    SELECT id, address, barangay FROM users
+    SELECT id, address, barangay, purok FROM users
     WHERE role = 'resident' AND (sms_alerts = 1 OR sms_alerts IS NULL)
       AND length(trim(coalesce(phone_number, ''))) > 0
-  `).all() as Array<{ id: number; address: string | null; barangay: string | null }>;
+  `).all() as Array<{ id: number; address: string | null; barangay: string | null; purok: string | null }>;
   const insert = database.prepare("INSERT OR IGNORE INTO sms_deliveries (advisory_id, resident_id) VALUES (?, ?)");
   let queued = 0;
   for (const recipient of recipients) {
@@ -213,7 +239,9 @@ async function publishSelectedChannels(
   channels: NotificationChannel[],
   recipientProfiles?: EmailRecipient[],
 ) {
-  if (!advisory.imageDataUrl) throw new Error("Add an announcement image before publishing to Facebook and Gmail.");
+  if (!advisory.imageDataUrl && channels.some(channel => ["facebook", "instagram", "gmail"].includes(channel))) {
+    throw new Error("Add an announcement image before publishing to Facebook, Instagram, or Gmail.");
+  }
   const socialChannels = channels.filter((channel): channel is SocialPlatform => channel === "facebook" || channel === "instagram");
   const socialDelivery = socialChannels.length
     ? await publishAnnouncementToSocial(portal, utility, advisory.id, advisory.reference, advisory.title, advisory.area, advisory.details, advisory.imageDataUrl, socialChannels)
@@ -252,6 +280,7 @@ function publicActor(actor: Actor) {
     phoneNumber: actor.phone_number ?? "",
     address: actor.address ?? "",
     barangay: actor.barangay ?? "",
+    purok: actor.purok ?? "",
     district: actor.district ?? "",
     city: actor.city ?? "",
     postalCode: actor.postal_code ?? "",
@@ -438,7 +467,7 @@ export function createApi(portal: Portal) {
       const email = required(req.body?.email, "Email").toLowerCase();
       const password = required(req.body?.password, "Password");
       const expectedRole = portal === "resident" ? "resident" : "admin";
-      const user = database.prepare("SELECT id, name, email, password_hash, role, utility, phone_number, address, barangay, district, city, postal_code, profile_image, sms_alerts, notify_maintenance, notify_email_digest, immediate_email_alerts, terms_accepted_at FROM users WHERE email = ? AND role = ? AND (utility IS ? OR utility = ?)").get(
+      const user = database.prepare("SELECT id, name, email, password_hash, role, utility, phone_number, address, barangay, purok, district, city, postal_code, profile_image, sms_alerts, notify_maintenance, notify_email_digest, immediate_email_alerts, terms_accepted_at FROM users WHERE email = ? AND role = ? AND (utility IS ? OR utility = ?)").get(
         email, expectedRole, portal === "resident" ? null : utilities[portal], portal === "resident" ? "" : utilities[portal],
       ) as (Actor & { password_hash: string }) | undefined;
       if (!user || !verifyPassword(password, user.password_hash)) return res.status(401).json({ error: "Email or password is incorrect." });
@@ -457,7 +486,12 @@ export function createApi(portal: Portal) {
         const currentProfile = res.locals.actor!;
         const phoneNumber = typeof req.body?.phoneNumber === "string" ? req.body.phoneNumber.trim() : currentProfile.phone_number ?? "";
         const address = typeof req.body?.address === "string" ? req.body.address.trim() : currentProfile.address ?? "";
-        const barangay = typeof req.body?.barangay === "string" ? req.body.barangay.trim() : currentProfile.barangay ?? "";
+        const barangay = req.body?.barangay === undefined
+          ? currentProfile.barangay ?? ""
+          : normalizeResidentBarangay(req.body.barangay);
+        const purok = req.body?.purok === undefined
+          ? currentProfile.purok ?? null
+          : normalizeResidentPurok(req.body.purok);
         const district = typeof req.body?.district === "string" ? req.body.district.trim() : currentProfile.district ?? "";
         const city = typeof req.body?.city === "string" ? req.body.city.trim() : currentProfile.city ?? "";
         const postalCode = typeof req.body?.postalCode === "string" ? req.body.postalCode.trim() : currentProfile.postal_code ?? "";
@@ -477,11 +511,11 @@ export function createApi(portal: Portal) {
         }
         const imageToSave = profileImage === undefined ? res.locals.actor!.profile_image ?? null : profileImage;
         const result = database.prepare(`
-          UPDATE users SET name = ?, email = ?, phone_number = ?, address = ?, barangay = ?, district = ?, city = ?, postal_code = ?, profile_image = ?, sms_alerts = ?, notify_maintenance = ?, notify_email_digest = ?, immediate_email_alerts = ?
+          UPDATE users SET name = ?, email = ?, phone_number = ?, address = ?, barangay = ?, purok = ?, district = ?, city = ?, postal_code = ?, profile_image = ?, sms_alerts = ?, notify_maintenance = ?, notify_email_digest = ?, immediate_email_alerts = ?
           WHERE id = ? AND role = 'resident'
-        `).run(name, email, phoneNumber, address, barangay, district, city, postalCode, imageToSave, smsAlerts, maintenanceAlerts, emailDigest, immediateEmailAlerts, res.locals.actor!.id);
+        `).run(name, email, phoneNumber, address, barangay, purok, district, city, postalCode, imageToSave, smsAlerts, maintenanceAlerts, emailDigest, immediateEmailAlerts, res.locals.actor!.id);
         if (!Number(result.changes)) return res.status(404).json({ error: "Resident account not found." });
-        const actor = database.prepare("SELECT id, name, email, role, utility, phone_number, address, barangay, district, city, postal_code, profile_image, sms_alerts, notify_maintenance, notify_email_digest, immediate_email_alerts, terms_accepted_at FROM users WHERE id = ?").get(res.locals.actor!.id) as Actor;
+        const actor = database.prepare("SELECT id, name, email, role, utility, phone_number, address, barangay, purok, district, city, postal_code, profile_image, sms_alerts, notify_maintenance, notify_email_digest, immediate_email_alerts, terms_accepted_at FROM users WHERE id = ?").get(res.locals.actor!.id) as Actor;
         return res.json({ actor: publicActor(actor) });
       } catch (error) {
         if (error instanceof Error && error.message.includes("UNIQUE constraint")) return res.status(409).json({ error: "An account with this email already exists." });
@@ -509,7 +543,8 @@ export function createApi(portal: Portal) {
         const password = required(req.body?.password, "Password");
         const phoneNumber = required(req.body?.phoneNumber, "Mobile telephone");
         const address = required(req.body?.address, "Street address");
-        const barangay = required(req.body?.barangay, "Barangay");
+        const barangay = normalizeResidentBarangay(req.body?.barangay);
+        const purok = normalizeResidentPurok(req.body?.purok);
         const district = required(req.body?.district, "District");
         const city = required(req.body?.city, "City");
         const postalCode = required(req.body?.postalCode, "Postal code");
@@ -522,10 +557,10 @@ export function createApi(portal: Portal) {
         const smsAlerts = req.body?.smsAlerts === false ? 0 : 1;
         const immediateEmailAlerts = req.body?.immediateEmailAlerts === true ? 1 : 0;
         const id = Number(database.prepare(`
-          INSERT INTO users (name, email, password_hash, role, utility, phone_number, address, barangay, district, city, postal_code, sms_alerts, immediate_email_alerts, terms_accepted_at)
-          VALUES (?, ?, ?, 'resident', NULL, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        `).run(name, email, hashPassword(password), phoneNumber, address, barangay, district, city, postalCode, smsAlerts, immediateEmailAlerts).lastInsertRowid);
-        const actor: Actor = { id, name, email, role: "resident", utility: null, phone_number: phoneNumber, address, barangay, district, city, postal_code: postalCode, sms_alerts: smsAlerts, immediate_email_alerts: immediateEmailAlerts, notify_maintenance: 1, notify_email_digest: 1 };
+          INSERT INTO users (name, email, password_hash, role, utility, phone_number, address, barangay, purok, district, city, postal_code, sms_alerts, immediate_email_alerts, terms_accepted_at)
+          VALUES (?, ?, ?, 'resident', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        `).run(name, email, hashPassword(password), phoneNumber, address, barangay, purok, district, city, postalCode, smsAlerts, immediateEmailAlerts).lastInsertRowid);
+        const actor: Actor = { id, name, email, role: "resident", utility: null, phone_number: phoneNumber, address, barangay, purok, district, city, postal_code: postalCode, sms_alerts: smsAlerts, immediate_email_alerts: immediateEmailAlerts, notify_maintenance: 1, notify_email_digest: 1 };
         return res.status(201).json({ token: issueSession(id), actor: publicActor(actor) });
       } catch (error) {
         if (error instanceof Error && error.message.includes("UNIQUE constraint")) return res.status(409).json({ error: "An account with this email already exists." });
@@ -565,16 +600,23 @@ export function createApi(portal: Portal) {
     const utility = utilities[portal];
     app.get("/advisories/recipient-estimate", requireUtility(utility), async (req, res) => {
       try {
-        const area = typeof req.query.area === "string" ? req.query.area : "";
-        if (!area.trim()) return res.status(400).json({ error: "Select an affected barangay before estimating recipients." });
-        const selectedBarangays = pilotBarangays.filter(barangay => area.toLocaleLowerCase().includes(barangay.toLocaleLowerCase()));
-        if (selectedBarangays.length !== 1) return res.status(400).json({ error: "Target exactly one pilot barangay per advisory: Carmen, Nazareth, or Balulang." });
+        const area = parseAffectedArea(req.query.area);
         const residents = await syncResidentProfiles(supabaseAdmin());
         const matched = residents.filter(resident => matchesResidentTarget(area, resident));
         const smsRecipients = matched.filter(resident => resident.sms_alerts !== false && Boolean(resident.phone_number?.trim())).length;
-        return res.json({ emailRecipients: matched.length, smsRecipients, totalResidentAccounts: residents.length });
+        const residentsMissingBarangay = residents.filter(resident => !resident.barangay?.trim()).length;
+        return res.json({
+          emailRecipients: matched.length,
+          smsRecipients,
+          totalResidentAccounts: residents.length,
+          residentsMissingBarangay,
+        });
       } catch (error) {
-        return res.status(503).json({ error: error instanceof Error ? `Could not estimate recipients: ${error.message}` : "Could not estimate recipients." });
+        const message = error instanceof Error ? error.message : "Could not estimate recipients.";
+        const status = message.startsWith("Affected service area") || message.startsWith("Choose a barangay")
+          ? 400
+          : 503;
+        return res.status(status).json({ error: status === 400 ? message : `Could not estimate recipients: ${message}` });
       }
     });
     app.post("/advisories/:id/deliver", requireUtility(utility), async (req, res) => {
@@ -584,10 +626,12 @@ export function createApi(portal: Portal) {
         .select("id,reference,title,utility,type,area,status,details,priority,service_starts_at,estimated_restoration_at,image_data_url,latitude,longitude,scheduled_at,publication_status,channels")
         .eq("id", advisoryId).eq("utility", utility).single();
       if (advisoryError || !advisory) return res.status(404).json({ error: "Supabase advisory not found." });
-      if (!advisory.image_data_url) {
-        return res.status(400).json({ error: "Add an announcement image before publishing to Facebook and Gmail." });
-      }
       try {
+        const channels = parseAnnouncementChannels(advisory.channels);
+        const area = parseAffectedArea(advisory.area);
+        if (!advisory.image_data_url && channels.some(channel => ["facebook", "instagram", "gmail"].includes(channel))) {
+          return res.status(400).json({ error: "Add an announcement image before publishing to Facebook, Instagram, or Gmail." });
+        }
         const residents = await syncResidentProfiles(supabase);
 
         const localAdvisoryId = (database.prepare(`
@@ -606,26 +650,26 @@ export function createApi(portal: Portal) {
             channels_json=excluded.channels_json
           RETURNING id
         `).get(
-          advisory.reference, advisory.title, advisory.utility, advisory.type, advisory.area,
+          advisory.reference, advisory.title, advisory.utility, advisory.type, area,
           advisory.status, advisory.details, advisory.priority, advisory.service_starts_at,
           advisory.estimated_restoration_at, advisory.image_data_url, advisory.latitude,
           advisory.longitude, advisory.scheduled_at, advisory.publication_status,
-          JSON.stringify(advisory.channels),
+          JSON.stringify(channels),
         ) as { id: number }).id;
 
         // Mirror scheduled Supabase notices into the shared API database without publishing yet.
         // The utility-specific worker will deliver them when their schedule becomes due.
         if (advisory.publication_status === "scheduled") return res.json({ scheduled: true });
 
-        const targetResidents = residents.filter(resident => matchesResidentTarget(advisory.area, resident));
+        const targetResidents = residents.filter(resident => matchesResidentTarget(area, resident));
         const delivery = await publishSelectedChannels(portal, utility, {
           id: localAdvisoryId,
           reference: advisory.reference,
           title: advisory.title,
-          area: advisory.area,
+          area,
           details: advisory.details,
           imageDataUrl: advisory.image_data_url,
-        }, parseAnnouncementChannels(advisory.channels), targetResidents);
+        }, channels, targetResidents);
 
         const localEmailRows = database.prepare(`
           SELECT users.email, deliveries.status, deliveries.error_message,
@@ -704,7 +748,7 @@ export function createApi(portal: Portal) {
     app.post("/advisories", requireUtility(utility), async (req, res) => {
       try {
         const title = required(req.body?.title, "Advisory title");
-        const area = required(req.body?.area, "Affected service area");
+        const area = parseAffectedArea(req.body?.area);
         const details = required(req.body?.details, "Public update");
         const type = typeof req.body?.type === "string" ? req.body.type : "Service disruption";
         const priority = req.body?.priority == null ? "Normal" : required(req.body.priority, "Priority");
@@ -732,7 +776,9 @@ export function createApi(portal: Portal) {
         const imageDataUrl = validatedImage
           ? `data:${validatedImage.mimeType};base64,${validatedImage.content.toString("base64")}`
           : null;
-        if (!imageDataUrl) throw new Error("Add an announcement image before publishing to Facebook and Gmail.");
+        if (!imageDataUrl && channels.some(channel => ["facebook", "instagram", "gmail"].includes(channel))) {
+          throw new Error("Add an announcement image before publishing to Facebook, Instagram, or Gmail.");
+        }
 
         const reference = `${portal === "water" ? "WD" : "CE"}-${Date.now().toString(36).toUpperCase()}`;
 
@@ -1100,7 +1146,7 @@ async function actorForAccessToken(token: string): Promise<Actor | undefined> {
   const { data: { user }, error: authError } = await supabase.auth.getUser(token);
   if (authError || !user) return undefined;
   const { data: profile, error: profileError } = await supabase.from("profiles")
-    .select("id,name,email,role,utility,phone_number,address,barangay,district,city,postal_code,profile_image,sms_alerts,notify_maintenance,notify_email_digest,immediate_email_alerts,terms_accepted_at")
+    .select("id,name,email,role,utility,phone_number,address,barangay,purok,district,city,postal_code,profile_image,sms_alerts,notify_maintenance,notify_email_digest,immediate_email_alerts,terms_accepted_at")
     .eq("id", user.id).single();
   if (profileError) throw profileError;
   if (!profile) return undefined;
@@ -1111,7 +1157,7 @@ async function actorForAccessToken(token: string): Promise<Actor | undefined> {
   `).get(profile.email, profile.role, profile.utility, profile.utility) as { id: number } | undefined;
   if (existing) {
     return database.prepare(`
-      SELECT id,name,email,role,utility,phone_number,address,barangay,district,city,
+      SELECT id,name,email,role,utility,phone_number,address,barangay,purok,district,city,
         postal_code,profile_image,sms_alerts,notify_maintenance,notify_email_digest,
         immediate_email_alerts,terms_accepted_at
       FROM users WHERE id = ?
@@ -1120,18 +1166,18 @@ async function actorForAccessToken(token: string): Promise<Actor | undefined> {
 
   database.prepare(`
     INSERT OR IGNORE INTO users
-      (name,email,password_hash,role,utility,phone_number,address,barangay,district,city,postal_code,
+      (name,email,password_hash,role,utility,phone_number,address,barangay,purok,district,city,postal_code,
        profile_image,sms_alerts,notify_maintenance,notify_email_digest,immediate_email_alerts,terms_accepted_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     profile.name, profile.email, hashPassword(randomBytes(32).toString("hex")),
-    profile.role, profile.utility, profile.phone_number, profile.address, profile.barangay,
+    profile.role, profile.utility, profile.phone_number, profile.address, profile.barangay, profile.purok,
     profile.district, profile.city, profile.postal_code, profile.profile_image,
     Number(profile.sms_alerts), Number(profile.notify_maintenance), Number(profile.notify_email_digest),
     Number(profile.immediate_email_alerts), profile.terms_accepted_at,
   );
   return database.prepare(`
-    SELECT id,name,email,role,utility,phone_number,address,barangay,district,city,
+    SELECT id,name,email,role,utility,phone_number,address,barangay,purok,district,city,
       postal_code,profile_image,sms_alerts,notify_maintenance,notify_email_digest,
       immediate_email_alerts,terms_accepted_at
     FROM users WHERE lower(email) = lower(?) AND role = ?

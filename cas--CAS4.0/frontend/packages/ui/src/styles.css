@@ -1137,6 +1137,23 @@ input[type="checkbox"] {
   color: #0284c7;
 }
 
+.portal-cepalco .cepalco-publish-top {
+  border-bottom-color: #d6ece8;
+}
+
+.portal-cepalco .cepalco-publish-top span,
+.portal-cepalco .cepalco-publish-top h2 {
+  color: #0d5f58 !important;
+}
+
+.portal-cepalco .cepalco-publish-footer {
+  border-top-color: #d6ece8;
+}
+
+.portal-cepalco .cepalco-publish-footer .water-draft-saved {
+  color: #0d5f58;
+}
+
 /* Form Card Headings & Descriptions */
 .cepalco-kicker {
   display: inline-block;

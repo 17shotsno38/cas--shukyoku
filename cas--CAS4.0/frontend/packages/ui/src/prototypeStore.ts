@@ -11,6 +11,7 @@ export type Actor = {
   phoneNumber?: string;
   address?: string;
   barangay?: string;
+  purok?: string;
   district?: string;
   city?: string;
   postalCode?: string;

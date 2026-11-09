@@ -38,17 +38,26 @@ function advisoryMessage(title: string, area: string, details: string, reference
 }
 
 async function fetchPermalink(id: string, fields: "permalink_url" | "permalink", accessToken: string): Promise<string | null> {
-  try {
-    const response = await fetch(`${graphBase()}/${encodeURIComponent(id)}?fields=${fields}&access_token=${encodeURIComponent(accessToken)}`);
-    const result = await response.json() as { permalink_url?: string; permalink?: string };
-    if (!response.ok) return null;
-    const permalink = fields === "permalink_url" ? result.permalink_url : result.permalink;
-    return typeof permalink === "string" && /^https:\/\/(?:www\.)?(?:facebook\.com|instagram\.com)\//.test(permalink)
-      ? permalink
-      : null;
-  } catch {
-    return null;
+  let lastFailure = "Meta returned no public permalink.";
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await fetch(`${graphBase()}/${encodeURIComponent(id)}?fields=${fields}&access_token=${encodeURIComponent(accessToken)}`);
+      if (response.ok) {
+        const result = await response.json() as { permalink_url?: string; permalink?: string };
+        const permalink = fields === "permalink_url" ? result.permalink_url : result.permalink;
+        if (typeof permalink === "string" && /^https:\/\/(?:www\.)?(?:facebook\.com|instagram\.com)\//.test(permalink)) {
+          return permalink;
+        }
+      } else {
+        lastFailure = `Meta permalink lookup returned HTTP ${response.status}.`;
+      }
+    } catch (error) {
+      lastFailure = error instanceof Error ? error.message : "Meta permalink lookup failed.";
+    }
+    if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 150 * (attempt + 1)));
   }
+  console.warn(`[social] Could not resolve ${fields} for published media ${id}: ${lastFailure}`);
+  return null;
 }
 
 function facebookPermalinkFromPostId(pageId: string, postId: string): string | null {
