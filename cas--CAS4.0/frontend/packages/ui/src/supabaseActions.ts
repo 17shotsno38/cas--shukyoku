@@ -1,4 +1,4 @@
-import type { Advisory, Portal, ServiceReport, SMSRecord, WorkOrder } from "./prototypeStore.js";
+import type { Advisory, Portal, ServiceReport, SMSRecord, WorkOrder } from "./domainTypes.js";
 import { getSupabase, profileActor, raiseSupabaseError, type SupabaseProfile } from "./supabase.js";
 
 type ActionOptions = RequestInit;
@@ -8,6 +8,23 @@ function toCamel(row: Record<string, unknown>): Record<string, unknown> {
     key.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase()),
     value,
   ]));
+}
+
+function storedAnnouncementImages(value: unknown): string[] {
+  if (value === null || value === undefined || value === "") return [];
+  if (Array.isArray(value)) {
+    if (!value.every(image => typeof image === "string")) throw new Error("Stored announcement images are invalid.");
+    return value;
+  }
+  if (typeof value !== "string") throw new Error("Stored announcement images are invalid.");
+  if (value.startsWith("[")) {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed) || !parsed.every(image => typeof image === "string")) {
+      throw new Error("Stored announcement images are invalid.");
+    }
+    return parsed;
+  }
+  return [value];
 }
 
 export async function supabaseAction<T>(
@@ -158,13 +175,17 @@ export async function supabaseAction<T>(
       existing[post.platform] = post.permalink_url ?? "";
       links.set(post.advisory_id, existing);
     }
-    return (data ?? []).map(row => ({
-      ...toCamel(row),
-      imageUrl: row.image_data_url,
-      facebookUrl: links.get(row.id)?.facebook || null,
-      instagramUrl: links.get(row.id)?.instagram || null,
-      channels: row.channels,
-    })) as Advisory[] as T;
+    return (data ?? []).map(row => {
+      const imageUrls = storedAnnouncementImages(row.image_data_url);
+      return {
+        ...toCamel(row),
+        imageUrl: imageUrls[0] ?? null,
+        imageUrls,
+        facebookUrl: links.get(row.id)?.facebook || null,
+        instagramUrl: links.get(row.id)?.instagram || null,
+        channels: row.channels,
+      };
+    }) as Advisory[] as T;
   }
 
   if (path === "/advisories" && method === "POST") {
@@ -181,7 +202,9 @@ export async function supabaseAction<T>(
       priority: body.priority ?? "Normal",
       service_starts_at: body.serviceStartsAt || null,
       estimated_restoration_at: body.estimatedRestorationAt || null,
-      image_data_url: body.imageDataUrl || null,
+      image_data_url: Array.isArray(body.imageDataUrls)
+        ? body.imageDataUrls.length === 1 ? body.imageDataUrls[0] : JSON.stringify(body.imageDataUrls)
+        : body.imageDataUrl || null,
       latitude: body.latitude || null,
       longitude: body.longitude || null,
       scheduled_at: scheduledAt,

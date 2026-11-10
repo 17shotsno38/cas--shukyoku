@@ -12,7 +12,7 @@ The portals use Supabase Auth and Supabase tables for sign-in and application re
 4. Run `migrations/20261023001000_profile_self_service.sql` to enable resident profile editing without allowing residents to change their role or utility.
 5. Run `migrations/20261109000000_activity_logs.sql` to create the utility-scoped advisory activity log.
 6. Run `migrations/20261109001000_advisory_statuses.sql` to normalize existing notices to Scheduled, Active, Resolved, or Cancelled.
-7. Run `migrations/20261109002000_resident_purok_profile.sql` to store each resident's selected Purok separately for accurate area-targeted notices.
+7. Run `migrations/20261109002000_resident_purok_profile.sql` to store each resident's selected Purok separately in their service-location profile.
 8. Create each utility administrator through **Authentication → Users**. Do not set `role` or `utility` in user metadata. Assign roles to accounts you control:
 
    ```sql
